@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-29
+
 ### Added
 
 - Recalls and safety alerts of Canada from the open data of Health Canada
@@ -31,3 +33,6 @@ the notes of the version's GitHub Release.
 - A configuration saved during a reconnection is never overwritten by the
   configuration read for it; a failed check while the recalls are still up to
   date adds a warning to them.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-rappels-canada/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-rappels-canada/releases/tag/v0.1.1

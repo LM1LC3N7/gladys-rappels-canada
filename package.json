@@ -1,6 +1,6 @@
 {
   "name": "gladys-rappels-canada",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Recalls and safety alerts in Canada (Health Canada open data: CFIA food, consumer products, Transport Canada vehicles, health products) for Gladys Assistant: device, scene trigger, action and widget.",
   "type": "module",
