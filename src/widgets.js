@@ -96,7 +96,7 @@ export const WIDGETS = {
       if (readAt !== null) {
         caption.push(formatDate(readAt, lang));
       }
-      if (freshness === 'old' || freshness === 'stale') {
+      if (freshness !== 'none' && warning !== null) {
         caption.push(warning[lang]);
       }
       components.push(

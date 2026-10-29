@@ -74,6 +74,8 @@ export const STATUS = {
       `The recalls are not up to date: the file of Health Canada was last read on ${time}.`,
     staleShort: ({ day }) =>
       `The recalls are not up to date: the file of Health Canada has not changed since ${day}.`,
+    lastFailed: ({ error, time }) =>
+      `Warning: the last check of the file failed (${error}); the recalls are those read on ${time}.`,
     summary: ({ text, time }) => `${text} File read at ${time}.`,
   },
   fr: {
@@ -96,6 +98,8 @@ export const STATUS = {
       `Les rappels ne sont pas à jour : le fichier de Santé Canada a été lu pour la dernière fois le ${time}.`,
     staleShort: ({ day }) =>
       `Les rappels ne sont pas à jour : le fichier de Santé Canada n’a pas changé depuis le ${day}.`,
+    lastFailed: ({ error, time }) =>
+      `Attention : la dernière vérification du fichier a échoué (${error}) ; les rappels sont ceux lus le ${time}.`,
     summary: ({ text, time }) => `${text} Fichier lu à ${time}.`,
   },
 };

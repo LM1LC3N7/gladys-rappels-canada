@@ -28,3 +28,6 @@ the notes of the version's GitHub Release.
   say it.
 - A copy per language, configurations applied in order, a restart publishing
   the fresh copy kept, a download given up at once on stop.
+- A configuration saved during a reconnection is never overwritten by the
+  configuration read for it; a failed check while the recalls are still up to
+  date adds a warning to them.

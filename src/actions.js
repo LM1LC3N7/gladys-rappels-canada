@@ -24,8 +24,10 @@ export async function readRecalls(monitor) {
   if (freshness !== 'fresh') {
     throw new Error(warning[language]);
   }
+  const text = sentence(recalls, language);
   return {
-    text: sentence(recalls, language),
+    // A failed last check while the recalls are still fresh: said first.
+    text: warning ? `${warning[language]} ${text}` : text,
     count: recalls.length,
   };
 }
@@ -42,10 +44,15 @@ export async function checkNow(monitor) {
   return Object.fromEntries(
     LANGUAGES.map((language) => [
       language,
-      STATUS[language].summary({
-        text: sentence(recalls, language),
-        time: formatDate(readAt, language),
-      }),
+      [
+        warning?.[language],
+        STATUS[language].summary({
+          text: sentence(recalls, language),
+          time: formatDate(readAt, language),
+        }),
+      ]
+        .filter(Boolean)
+        .join(' '),
     ]),
   );
 }

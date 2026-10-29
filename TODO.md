@@ -3,7 +3,8 @@
 ## Before announcing
 
 - [x] Review r1 (2026-10-29): REFUSÉ, 3 important, 9 minor: fixed.
-- [ ] Review r2.
+- [x] Review r2 (2026-10-29): REFUSÉ, 1 important, 3 minor: fixed.
+- [ ] Review r3.
 - [ ] Try on a real Gladys 5.1+: device creation, the widget, a scene on
       `new_recall` over a few days, the scene action.
 - [ ] Turn on "Private vulnerability reporting" (SECURITY.md points there).

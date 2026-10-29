@@ -68,7 +68,10 @@ jours est retenue sans déclencher. Un évènement de scène refusé par Gladys 
 renvoyé à la vérification suivante ; au plus 20 évènements partent par
 vérification, le reste à la suivante. Un évènement part avant que `/data` ne
 l'enregistre : si l'intégration est tuée entre les deux, il repart après le
-redémarrage (au moins une fois, jamais perdu).
+redémarrage. Certains nouveaux rappels ne partent jamais, et le statut dit
+quand les plafonds sont atteints : au-delà de 500 nouvelles fiches dans un
+fichier, au-delà de 500 évènements en attente, ou quand leur jour de
+« dernière mise à jour » a plus de 7 jours.
 
 Ce qui a été vu, la copie des fiches récentes et l'heure de la dernière
 vérification sont gardés dans `/data` : un redémarrage ne déclenche rien une
@@ -113,6 +116,11 @@ deux intervalles et une heure et que le fichier n'est pas périmé. Sinon :
   sur des données qui ne sont pas à jour ;
 - le bouton de la configuration donne cette raison au lieu des rappels ;
 - le widget titre « Rappels non à jour » et donne la raison sous la liste.
+
+Quand la dernière vérification a échoué mais que les rappels sont encore à
+jour, l'action de scène, le bouton et le widget les donnent précédés d'un
+avertissement (« Attention : la dernière vérification du fichier a échoué … ;
+les rappels sont ceux lus le … »).
 
 Rien n'est publié à 0 quand le fichier n'a pas pu être lu.
 

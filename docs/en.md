@@ -63,7 +63,9 @@ updated" day is more than 7 days old is remembered without firing. A scene
 event Gladys refuses is sent again at the next check; at most 20 events leave
 per check, the rest at the next one. An event is sent before `/data` records
 it: if the integration is killed in between, it is sent again after the
-restart (at least once, never lost).
+restart. Some new recalls are never sent, and the status says when the caps
+are reached: beyond 500 new sheets in one file, beyond 500 events waiting,
+or once their "last updated" day is more than 7 days old.
 
 What was seen, the copy of the recent sheets and the time of the last check
 are kept in `/data`: a restart fires nothing again, keeps the time planned
@@ -106,6 +108,10 @@ two intervals and an hour old and the file is not stale. Otherwise:
 - the configuration button gives that reason instead of the recalls;
 - the widget titles "Recalls not up to date" and gives the reason under the
   list.
+
+When the last check failed but the recalls are still up to date, the scene
+action, the button and the widget give them with a warning first ("Warning:
+the last check of the file failed …; the recalls are those read on …").
 
 Nothing is published as 0 when the file could not be read.
 

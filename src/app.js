@@ -61,10 +61,15 @@ export function registerHandlers(gladys, options = {}) {
       return fn(...args);
     };
 
+  // Configurations saved by the user, counted: a getConfig() of a
+  // reconnection answered after one of them carries an older configuration.
+  let saved = 0;
+
   async function onConnected(gen) {
     if (stopped || gen !== generation) {
       return;
     }
+    const savedBefore = saved;
     let config;
     try {
       config = normalizeConfig(await gladys.getConfig());
@@ -93,7 +98,8 @@ export function registerHandlers(gladys, options = {}) {
     try {
       if (started) {
         // A reconnection (Gladys restarted): publish everything again.
-        await monitor.resync(config);
+        // A configuration saved while it was read is newer: kept (null).
+        await monitor.resync(saved === savedBefore ? config : null);
       } else {
         await monitor.start(config);
         started = true;
@@ -124,7 +130,10 @@ export function registerHandlers(gladys, options = {}) {
 
   gladys.onDeviceCreated(whenReady((device) => monitor.onDeviceCreated(device)));
 
-  gladys.onConfigUpdated(whenReady((newConfig) => monitor.reconfigure(normalizeConfig(newConfig))));
+  gladys.onConfigUpdated((newConfig) => {
+    saved += 1;
+    return whenReady(() => monitor.reconfigure(normalizeConfig(newConfig)))();
+  });
 
   gladys.onAction(
     CONFIG_ACTION,

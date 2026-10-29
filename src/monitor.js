@@ -289,7 +289,9 @@ export class Monitor {
     return run;
   }
 
-  async applyConfig(config, { quiet = false } = {}) {
+  /** `config` null: the configuration in force is kept (a reconnection after a newer save). */
+  async applyConfig(newConfig, { quiet = false } = {}) {
+    const config = newConfig ?? this.config;
     const previous = this.config;
     this.config = config;
     if (!quiet) {
@@ -665,6 +667,8 @@ export class Monitor {
     if (left.length > 0) {
       logger.debug(`${left.length} new recall(s) left for the next check`);
     }
+    // Pending NIDs stay unknown, so they count in the 500 sheets never seen
+    // kept from a file: beyond, `truncated` is said in the status.
     return left.slice(-MAX_PENDING);
   }
 
@@ -834,6 +838,12 @@ export class Monitor {
       warning = renderEach(STATUS, 'staleShort', (l) => ({
         day: formatSourceDay(this.lastModifiedDay, l),
       }));
+    } else if (this.error !== null) {
+      // Still fresh, but the last check failed: said along with the recalls.
+      warning = renderEach(STATUS, 'lastFailed', (l) => ({
+        error: describeError(this.error, l),
+        time: formatDate(this.lastSuccessAt, l),
+      }));
     }
     return {
       recalls: this.recalls,
@@ -927,7 +937,7 @@ function sanitizeCopy(copy) {
 }
 
 /** Only what has the expected shape is taken from /data. */
-function sanitize(data) {
+export function sanitize(data) {
   const out = {};
   out.attemptAt = Number.isFinite(data.attemptAt) ? data.attemptAt : null;
   out.pauseUntil = Number.isFinite(data.pauseUntil) ? data.pauseUntil : null;
