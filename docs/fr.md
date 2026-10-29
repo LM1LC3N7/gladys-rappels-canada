@@ -1,67 +1,109 @@
-# Template de démonstration
+# Rappels au Canada
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Les rappels et avis de sécurité publiés au Canada, lus dans les données
+ouvertes de Santé Canada : rappels d'aliments de l'Agence canadienne
+d'inspection des aliments (ACIA), produits de consommation, véhicules, pneus
+et sièges d'auto pour enfants de Transports Canada, médicaments et produits de
+santé, instruments médicaux. L'intégration donne à Gladys un appareil à deux
+valeurs, un déclencheur de scène pour chaque nouveau rappel de votre
+sélection, une action de scène et un widget de tableau de bord.
+
+Elle a été essayée sur le vrai fichier de Santé Canada et dans un Gladys de
+test (29/10/2026), pas encore sur des semaines d'usage réel. Aucun appareil
+chez vous n'est en jeu : les données viennent du cloud.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+- Un appareil **Rappels au Canada** avec :
+  - **Rappels sur 7 jours** : les fiches de votre sélection, non archivées,
+    dont le jour de « dernière mise à jour » est l'un des 7 derniers jours
+    (aujourd'hui compris, fuseau horaire de Gladys). Le fichier ne donne pas
+    de date de publication : une fiche plus ancienne mise à jour cette semaine
+    compte aussi.
+  - **Dernier rappel** : la plus récente d'entre elles, avec son jour.
+- Un déclencheur de scène **Canada : nouveau rappel dans ma sélection**, avec
+  en variables le titre, le produit, la catégorie, le problème, la classe de
+  rappel, le lien et un résumé en une phrase. Le déclencheur peut se limiter
+  à certaines catégories.
+- Une action de scène **Canada : lire les rappels des 7 derniers jours** (une
+  phrase à envoyer par message ou à lire à voix haute, et le nombre).
+- Un widget **Rappels au Canada** : les derniers rappels de votre sélection,
+  les plus graves (classe 1, type I) en rouge, avec le lien de chaque fiche.
+- Un bouton **Afficher les rappels des 7 derniers jours** dans la
+  configuration.
 
 ## Configuration
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+1. **Catégories** : aliments (ACIA), produits de consommation, véhicules
+   (Transports Canada), médicaments et produits de santé, instruments
+   médicaux, autres. Les instruments médicaux ne sont pas suivis par défaut :
+   un quart des fiches, presque tout du matériel d'hôpital et de laboratoire.
+2. **Marques ou mots** (facultatif) : seulement les rappels qui en citent un
+   dans leur titre, leur produit ou leur catégorie, séparés par des virgules.
+   Accents et majuscules indifférents ; un mot ne correspond qu'à des mots
+   entiers (« noix » ne correspond pas à « noisette »).
+3. **Fréquence de vérification** : 3, 6 (par défaut), 12 ou 24 heures.
+4. **Langue des rappels** : anglais ou français. Elle choisit le fichier lu
+   (chaque langue a le sien), les noms des fonctionnalités à leur création et
+   les textes envoyés aux scènes.
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+Enregistrez, puis créez l'appareil dans l'onglet **Découverte**.
 
-## Actions
+## Fonctionnement
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+Santé Canada publie un fichier par langue (16 Mo en anglais, 21 Mo en
+français, environ 34 000 fiches depuis 1991), régénéré une fois par jour vers
+02 h 15 UTC. À chaque vérification, l'intégration demande si le fichier a
+changé (`If-None-Match` et `If-Modified-Since`) : tant qu'il n'a pas changé, le
+serveur répond « non modifié » et rien n'est téléchargé. Quand il a changé, le
+fichier est lu au fil de l'eau : seuls les numéros (NID) des fiches et les
+fiches des 30 derniers jours restent en mémoire. Une requête à la fois, avec
+un User-Agent au nom de l'intégration.
 
-## Scènes
+Un rappel est **nouveau** quand son numéro était absent de tous les fichiers
+lus avant. Le premier fichier lu ne déclenche rien (ce qu'il liste n'est pas
+une nouvelle), pas plus qu'une sélection élargie ni une fiche seulement mise à
+jour. Une nouvelle fiche dont le jour de « dernière mise à jour » a plus de 7
+jours est retenue sans déclencher. Un évènement de scène refusé par Gladys est
+renvoyé à la vérification suivante ; au plus 20 évènements partent par
+vérification, le reste à la suivante.
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+Ce qui a été vu, la copie des fiches récentes et l'heure de la dernière
+vérification sont gardés dans `/data` : un redémarrage ne déclenche rien une
+seconde fois et garde l'heure prévue de la vérification suivante. Un changement de
+sélection s'applique tout de suite depuis la copie gardée ; un changement de
+langue lit l'autre fichier (pas deux fois en 5 minutes).
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+## Statut et pannes
 
-## Tableau de bord
+Le statut de l'intégration indique :
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+- que le fichier est illisible (réseau, erreur HTTP), avec le prochain essai :
+  15 minutes plus tard, puis 30, doublé jusqu'à l'intervalle ; une réponse
+  « 429 » ou « 5xx » ouvre une pause de 1 minute à 6 heures (le `Retry-After`
+  du serveur quand il en donne un), gardée après un redémarrage ;
+- que le fichier n'a pas changé depuis plus de 3 jours (par rapport à la date
+  donnée par le serveur) : les compteurs ne sont alors plus publiés jusqu'à sa
+  mise à jour, pour ne pas montrer une vieille valeur comme récente ;
+- qu'aucune catégorie n'est choisie ;
+- que `/data` ne peut pas être lu ou écrit.
 
-## Dépannage
+Rien n'est publié à 0 quand le fichier n'a pas pu être lu : les valeurs restent
+telles quelles.
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+## Limites
+
+- Un complément, pas un système d'alerte officiel : vérifiez toujours la fiche
+  de rappel sur [recalls-rappels.canada.ca](https://recalls-rappels.canada.ca/fr).
+  Non affiliée au gouvernement du Canada.
+- Le fichier ne contient ni code-barres (CUP) ni province : on ne peut filtrer
+  ni sur l'un ni sur l'autre.
+- Le fichier ne contient pas de date de publication, seulement la « dernière
+  mise à jour ».
+
+## Données et licence
+
+Contient des informations visées par la
+[Licence du gouvernement ouvert – Canada](https://ouvert.canada.ca/fr/licence-du-gouvernement-ouvert-canada)
+(jeu de données [Rappels et avis de sécurité](https://ouvert.canada.ca/data/fr/dataset/d38de914-c94c-429b-8ab1-8776c31643e3),
+Santé Canada). Ni compte, ni clé, ni donnée personnelle.
