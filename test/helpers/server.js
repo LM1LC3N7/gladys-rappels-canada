@@ -58,6 +58,7 @@ export async function startServer({
     date,
     // false, a status (503, 429, 404…), 'drop', 'stall', 'oversize', 'chunked-oversize'
     fault: false,
+    slowMs: 150,
     retryAfter: null,
     requests: [],
     raw: null,
@@ -108,16 +109,51 @@ export async function startServer({
     }
     headers.ETag = srv.etag(language);
     headers['Last-Modified'] = srv.lastModified;
+    if (srv.fault === 'redirect') {
+      res.writeHead(302, { ...headers, Location: `${srv.baseUrl}${FILE_EN}` });
+      res.end();
+      return;
+    }
+    if (srv.fault === 'force304') {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+    // HTTP: If-None-Match decides when sent; else If-Modified-Since, a file
+    // not modified after that date being a 304.
+    const inm = req.headers['if-none-match'];
+    const ims = Date.parse(req.headers['if-modified-since'] ?? '');
     if (
-      req.headers['if-none-match'] === headers.ETag ||
-      (req.headers['if-none-match'] === undefined &&
-        req.headers['if-modified-since'] === srv.lastModified)
+      inm === headers.ETag ||
+      (inm === undefined && Number.isFinite(ims) && Date.parse(srv.lastModified) <= ims)
     ) {
       res.writeHead(304, headers);
       res.end();
       return;
     }
     const body = Buffer.from(srv.body(language));
+    if (srv.fault === 'unclosed') {
+      // A clean end of stream, but the array is not closed.
+      const text = body.toString();
+      res.writeHead(200, { ...headers, 'Content-Type': 'application/json' });
+      res.end(text.slice(0, text.lastIndexOf('}') + 1));
+      return;
+    }
+    if (srv.fault === 'slow') {
+      // Alive but slow: a chunk every `slowMs`, longer in all than the stall limit.
+      res.writeHead(200, { ...headers, 'Content-Type': 'application/json' });
+      const size = Math.ceil(body.length / 6);
+      let at = 0;
+      const next = () => {
+        if (res.destroyed) return;
+        res.write(body.subarray(at, at + size));
+        at += size;
+        if (at >= body.length) res.end();
+        else setTimeout(next, srv.slowMs);
+      };
+      next();
+      return;
+    }
     if (srv.fault === 'stall') {
       res.writeHead(200, { ...headers, 'Content-Type': 'application/json' });
       res.write(body.subarray(0, 1000));

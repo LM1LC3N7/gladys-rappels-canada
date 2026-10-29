@@ -321,23 +321,40 @@ test('a reconnection republishes the fresh states, never downloads again', async
   assert.equal(world.fake.lastState(week(world)), 12);
 });
 
-test('nothing old is republished: no state after a restart before a check, none from a check too old', async (t) => {
+test('a restart publishes the copy of /data while fresh, nothing from a copy too old', async (t) => {
   const server = await startServer();
   t.after(() => server.close());
   const dataDir = await tempDir(t);
   const world = await ready(t, { server, dataDir });
   await world.app.stop();
+  // 1 h later: the copy (read 1 h ago) is fresh, published at once, connected.
   const again = await createWorld(t, {
     server,
     dataDir,
     clock: testClock({ start: world.clock.now() + HOUR }),
     devices: world.fake.devices,
   });
-  await again.fake.deviceCreated(world.fake.devices[0]);
-  assert.deepEqual(again.fake.states, [], 'the copy of /data is not published before a check');
-  // The widget shows the copy meanwhile.
-  const widget = await again.fake.widgetGet('recalls', { language: 'fr' });
-  assert.match(JSON.stringify(widget), /12 rappels sur 7 jours/);
+  const requests = server.requests.length;
+  assert.equal(again.fake.lastState(week(world)), 12);
+  assert.equal(again.fake.connectionStatus.connected, true);
+  assert.equal(server.requests.length, requests, 'no download for it');
+  await again.app.stop();
+  // 14 h later (more than two intervals and an hour): nothing published.
+  const third = await createWorld(t, {
+    server,
+    dataDir,
+    clock: testClock({ start: world.clock.now() + 14 * HOUR }),
+    devices: world.fake.devices,
+    connect: false,
+  });
+  server.fault = 'drop';
+  await third.gladys.connect();
+  await third.app.ready;
+  await tick(third, 1);
+  assert.deepEqual(third.fake.states, []);
+  const widget = await third.fake.widgetGet('recalls', { language: 'fr' });
+  assert.match(JSON.stringify(widget), /Rappels non à jour/);
+  assert.doesNotMatch(JSON.stringify(widget), /Aucun rappel/);
 });
 
 test('a change of language reads the other file, fires nothing, and not twice in 5 minutes', async (t) => {
@@ -352,8 +369,9 @@ test('a change of language reads the other file, fires nothing, and not twice in
   assert.equal(world.server.count(FILE_EN), 1, 'not yet');
   await tick(world, MINUTE + 1);
   assert.equal(world.server.count(FILE_EN), 2);
-  // The copy of the first file was replaced: read in full (no 304 for another copy).
-  assert.equal(world.server.requests.at(-1).headers['if-none-match'], undefined);
+  // The copy of the first file was kept: going back to it is a 304.
+  assert.equal(world.server.requests.at(-1).headers['if-none-match'], '"fake-en-1"');
+  assert.match(world.fake.lastState(latest(world)), /^Oct 27 · /);
 });
 
 test('a change of the selection is applied from the copy, without a download', async (t) => {

@@ -20,11 +20,11 @@ export const TTL_SECONDS = 600;
 
 export const TEXT = {
   waiting: { en: 'Waiting for Health Canada…', fr: 'En attente de Santé Canada…' },
+  notUpToDate: { en: 'Recalls not up to date', fr: 'Rappels non à jour' },
   none: { en: 'No recall in 7 days', fr: 'Aucun rappel sur 7 jours' },
   one: { en: '1 recall in 7 days', fr: '1 rappel sur 7 jours' },
   many: { en: ' recalls in 7 days', fr: ' rappels sur 7 jours' },
   source: { en: 'Source: Health Canada', fr: 'Source : Santé Canada' },
-  stale: { en: 'file not updated', fr: 'fichier non mis à jour' },
   sheet: { en: 'Recall sheet', fr: 'Fiche de rappel' },
   issue: { en: 'Issue', fr: 'Problème' },
   recallClass: { en: 'Class', fr: 'Classe' },
@@ -78,15 +78,16 @@ export const WIDGETS = {
   [WIDGET_KEY]: {
     async get(monitor, { language = 'en' } = {}) {
       const lang = language === 'fr' ? 'fr' : 'en';
-      const { recalls, ok, readAt, stale } = monitor.snapshot();
+      const { recalls, freshness, warning, readAt } = monitor.snapshot();
       const source = t(TEXT.source, lang);
-      const components = [
-        {
-          type: 'text',
-          variant: 'heading',
-          text: ok ? heading(recalls.length, lang) : t(TEXT.waiting, lang),
-        },
-      ];
+      // Never "no recall" from data that is not up to date: the heading says so.
+      let title = heading(recalls.length, lang);
+      if (freshness === 'none') {
+        title = t(TEXT.waiting, lang);
+      } else if (freshness !== 'fresh') {
+        title = t(TEXT.notUpToDate, lang);
+      }
+      const components = [{ type: 'text', variant: 'heading', text: title }];
       const rows = recalls.slice(0, MAX_ITEMS).map((recall) => itemOf(recall, lang));
       if (rows.length > 0) {
         components.push({ type: 'card-list', display: 'list', items: rows });
@@ -95,8 +96,8 @@ export const WIDGETS = {
       if (readAt !== null) {
         caption.push(formatDate(readAt, lang));
       }
-      if (stale) {
-        caption.push(t(TEXT.stale, lang));
+      if (freshness === 'old' || freshness === 'stale') {
+        caption.push(warning[lang]);
       }
       components.push(
         { type: 'text', variant: 'caption', text: caption.join(' · ') },

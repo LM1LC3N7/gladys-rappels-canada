@@ -19,8 +19,15 @@
 // sheets worth keeping stay in memory, never the file.
 // -----------------------------------------------------------------------------
 
+import { readFileSync } from 'node:fs';
 import { categoryKey } from './config.js';
-import { JsonArrayReader } from './jsonArray.js';
+import { JsonArrayError, JsonArrayReader } from './jsonArray.js';
+
+// The version of the User-Agent follows the release (package.json, copied into
+// the image), never written by hand here.
+const VERSION = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version;
 
 export const BASE_URL =
   'https://recalls-rappels.canada.ca/sites/default/files/opendata-donneesouvertes/';
@@ -29,8 +36,7 @@ export const SITE_URL = {
   en: 'https://recalls-rappels.canada.ca/en',
   fr: 'https://recalls-rappels.canada.ca/fr',
 };
-export const USER_AGENT =
-  'gladys-rappels-canada/0.1.0 (Gladys Assistant integration; +https://github.com/LM1LC3N7/gladys-rappels-canada)';
+export const USER_AGENT = `gladys-rappels-canada/${VERSION} (Gladys Assistant integration; +https://github.com/LM1LC3N7/gladys-rappels-canada)`;
 
 // Bounds: three times the French file, and five times its count of sheets.
 export const MAX_BYTES = 64 * 1024 * 1024;
@@ -42,6 +48,11 @@ export const MAX_OBJECT_BYTES = 64 * 1024;
 export const HEADERS_TIMEOUT_MS = 30000;
 export const STALL_TIMEOUT_MS = 60000;
 export const TOTAL_TIMEOUT_MS = 10 * 60000;
+// A file where fewer than half of the sheets carry a readable "last updated"
+// day is not the expected format (a renamed column): refused, never read as
+// "no recall this week". Checked from 100 sheets on.
+export const MIN_DATED_SHARE = 0.5;
+const MIN_SHEETS_FOR_FORMAT = 100;
 
 // Column names of each file.
 const COLUMNS = {
@@ -69,15 +80,41 @@ const COLUMNS = {
 
 export class SourceError extends Error {
   /**
-   * @param {string} message
-   * @param {object} [details] status (HTTP), retryAfterMs
+   * @param {string} message for the logs (English, technical)
+   * @param {object} [details] kind (see ERRORS in messages.js), status (HTTP), retryAfterMs
    */
-  constructor(message, { status = null, retryAfterMs = null } = {}) {
+  constructor(message, { kind = 'network', status = null, retryAfterMs = null } = {}) {
     super(message);
     this.name = 'SourceError';
+    this.kind = kind;
     this.status = status;
     this.retryAfterMs = retryAfterMs;
   }
+}
+
+// Network codes of Node and undici, as kinds of error people can read.
+const NETWORK_KINDS = {
+  ENOTFOUND: 'dns',
+  EAI_AGAIN: 'dns',
+  ECONNREFUSED: 'refused',
+  ECONNRESET: 'closed',
+  EPIPE: 'closed',
+  UND_ERR_SOCKET: 'closed',
+  ETIMEDOUT: 'timeout',
+  UND_ERR_CONNECT_TIMEOUT: 'timeout',
+  UND_ERR_HEADERS_TIMEOUT: 'timeout',
+};
+
+/** The kind of a fetch failure, from its cause. */
+export function networkKind(err) {
+  const code = err?.cause?.code ?? err?.code;
+  if (NETWORK_KINDS[code]) {
+    return NETWORK_KINDS[code];
+  }
+  if (/redirect/i.test(`${err?.cause?.message ?? ''} ${err?.message ?? ''}`)) {
+    return 'redirect';
+  }
+  return 'network';
 }
 
 /** Text of a cell: no zero-width or control characters, single spaces, clipped. */
@@ -193,9 +230,12 @@ export async function download({
   baseUrl = BASE_URL,
   etag = null,
   lastModified = null,
+  sendEtag = true,
   keep,
   maxBytes = MAX_BYTES,
+  maxRecords = MAX_RECORDS,
   timeouts = {},
+  signal = null,
 }) {
   const url = `${baseUrl}${FILES[language]}`;
   const host = new URL(url).host;
@@ -207,7 +247,9 @@ export async function download({
   };
   const headers = { Accept: 'application/json', 'User-Agent': USER_AGENT };
   // The validators come from the server: kept only when they are plain text.
-  if (etag && /^[\x20-\x7e]{1,200}$/.test(etag)) {
+  // `sendEtag` false: only the date is sent, so a CDN edge holding an older
+  // file answers 304 instead of sending it again (its ETag never matches).
+  if (sendEtag && etag && /^[\x20-\x7e]{1,200}$/.test(etag)) {
     headers['If-None-Match'] = etag;
   }
   if (lastModified && /^[\x20-\x7e]{1,100}$/.test(lastModified)) {
@@ -215,22 +257,41 @@ export async function download({
   }
   const controller = new AbortController();
   let reason = null;
-  const abort = (why) => {
+  let kind = null;
+  const abort = (why, why2) => {
     reason ??= why;
+    kind ??= why2;
     controller.abort();
   };
-  const total = setTimeout(() => abort(`not read in ${limits.total / 1000} s`), limits.total);
-  let stall = setTimeout(() => abort(`no answer in ${limits.headers / 1000} s`), limits.headers);
+  // stop() of the integration: the download is given up at once.
+  const onStop = () => abort('stopped', 'stopped');
+  if (signal?.aborted) {
+    onStop();
+  }
+  signal?.addEventListener('abort', onStop, { once: true });
+  const total = setTimeout(
+    () => abort(`not read in ${limits.total / 1000} s`, 'tooLong'),
+    limits.total,
+  );
+  let stall = setTimeout(
+    () => abort(`no answer in ${limits.headers / 1000} s`, 'timeout'),
+    limits.headers,
+  );
   const rearm = () => {
     clearTimeout(stall);
-    stall = setTimeout(() => abort(`no data for ${limits.stall / 1000} s`), limits.stall);
+    stall = setTimeout(
+      () => abort(`no data for ${limits.stall / 1000} s`, 'stalled'),
+      limits.stall,
+    );
   };
   try {
     let response;
     try {
       response = await fetchImpl(url, { headers, signal: controller.signal, redirect: 'error' });
     } catch (err) {
-      throw new SourceError(`${host}: ${reason ?? err?.cause?.code ?? err.message}`);
+      throw new SourceError(`${host}: ${reason ?? err?.cause?.code ?? err.message}`, {
+        kind: kind ?? networkKind(err),
+      });
     }
     const date = httpDate(response.headers.get('date'));
     const modifiedAt = response.headers.get('last-modified');
@@ -241,6 +302,7 @@ export async function download({
     if (response.status !== 200) {
       await response.body?.cancel().catch(() => {});
       throw new SourceError(`${host}: HTTP ${response.status}`, {
+        kind: 'http',
         status: response.status,
         retryAfterMs: retryAfterMs(response.headers),
       });
@@ -248,15 +310,18 @@ export async function download({
     const length = Number(response.headers.get('content-length'));
     if (Number.isFinite(length) && length > maxBytes) {
       await response.body?.cancel().catch(() => {});
-      throw new SourceError(`${host}: file of ${length} bytes, more than ${maxBytes}`);
+      throw new SourceError(`${host}: file of ${length} bytes, more than ${maxBytes}`, {
+        kind: 'size',
+      });
     }
     const nids = [];
     const records = [];
     let truncated = false;
+    let dated = 0;
     const reader = new JsonArrayReader({
       maxObjectBytes: MAX_OBJECT_BYTES,
       onObject: (raw) => {
-        if (nids.length >= MAX_RECORDS) {
+        if (nids.length >= maxRecords) {
           truncated = true;
           return;
         }
@@ -265,6 +330,9 @@ export async function download({
           return;
         }
         nids.push(record.nid);
+        if (record.updated !== null) {
+          dated += 1;
+        }
         if (keep(record)) {
           records.push(record);
         }
@@ -278,13 +346,13 @@ export async function download({
         rearm();
         bytes += chunk.byteLength;
         if (bytes > maxBytes) {
-          abort(`more than ${maxBytes} bytes`);
+          abort(`more than ${maxBytes} bytes`, 'size');
           break;
         }
         reader.write(decoder.decode(chunk, { stream: true }));
       }
       if (reason) {
-        throw new SourceError(`${host}: ${reason}`);
+        throw new SourceError(`${host}: ${reason}`, { kind });
       }
       reader.write(decoder.decode());
       reader.end();
@@ -292,10 +360,15 @@ export async function download({
       if (err instanceof SourceError) {
         throw err;
       }
-      throw new SourceError(`${host}: ${reason ?? `unexpected file (${err.message})`}`);
+      throw new SourceError(`${host}: ${reason ?? `unexpected file (${err.message})`}`, {
+        kind: kind ?? (err instanceof JsonArrayError ? 'format' : networkKind(err)),
+      });
     }
     if (nids.length === 0) {
-      throw new SourceError(`${host}: empty file`);
+      throw new SourceError(`${host}: empty file`, { kind: 'format' });
+    }
+    if (nids.length >= MIN_SHEETS_FOR_FORMAT && dated / nids.length < MIN_DATED_SHARE) {
+      throw new SourceError(`${host}: ${dated} of ${nids.length} sheets dated`, { kind: 'format' });
     }
     return {
       modified: true,
@@ -310,5 +383,6 @@ export async function download({
   } finally {
     clearTimeout(total);
     clearTimeout(stall);
+    signal?.removeEventListener('abort', onStop);
   }
 }

@@ -61,12 +61,24 @@ The first file ever read fires nothing (what is listed then is not news), nor
 does a widened selection, nor a sheet only updated. A new sheet whose "last
 updated" day is more than 7 days old is remembered without firing. A scene
 event Gladys refuses is sent again at the next check; at most 20 events leave
-per check, the rest at the next one.
+per check, the rest at the next one. An event is sent before `/data` records
+it: if the integration is killed in between, it is sent again after the
+restart (at least once, never lost).
 
 What was seen, the copy of the recent sheets and the time of the last check
-are kept in `/data`: a restart fires nothing again and keeps the time planned
-for the next check. Changing the selection is applied at once from the copy
-kept; changing the language reads the other file (not twice in 5 minutes).
+are kept in `/data`: a restart fires nothing again, keeps the time planned
+for the next check, and publishes the copy kept if it is still fresh.
+Changing the selection is applied at once from the copy kept; changing the
+language checks the other file (not twice in 5 minutes, never during a
+pause). A copy of each language is kept, so going back costs a "not
+modified". Configurations saved one after the other are applied in order:
+the last one wins.
+
+When a server of the content network still serves an older file than the
+copy kept, the copy is kept and the next checks send only its date, so that
+server answers "not modified" instead of sending 16 MB again. A file in
+another format (fewer than half of the sheets dated, a column renamed) is
+refused, never read as "no recall".
 
 ## Status and failures
 
@@ -82,8 +94,20 @@ The status of the integration says:
 - no category is selected;
 - `/data` cannot be read or written.
 
-Nothing is ever published as 0 when the file could not be read: the values
-stay as they were.
+## Up to date or not
+
+The recalls are **up to date** when the last successful check is less than
+two intervals and an hour old and the file is not stale. Otherwise:
+
+- the counters of the device are not published (they keep their last value);
+- the scene action fails with the reason ("The recalls are not up to date:
+  the file of Health Canada was last read on …" or "… has not changed since
+  …"), so a scene never reads "no recall" from data that is not current;
+- the configuration button gives that reason instead of the recalls;
+- the widget titles "Recalls not up to date" and gives the reason under the
+  list.
+
+Nothing is published as 0 when the file could not be read.
 
 ## Limits
 

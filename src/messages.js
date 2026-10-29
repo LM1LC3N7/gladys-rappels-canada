@@ -70,6 +70,10 @@ export const STATUS = {
     truncated: 'The file holds more sheets than the integration reads: the last ones are ignored.',
     waiting: 'Waiting for the first reading of the file of Health Canada.',
     notYet: 'The file of Health Canada has not been read yet.',
+    old: ({ time }) =>
+      `The recalls are not up to date: the file of Health Canada was last read on ${time}.`,
+    staleShort: ({ day }) =>
+      `The recalls are not up to date: the file of Health Canada has not changed since ${day}.`,
     summary: ({ text, time }) => `${text} File read at ${time}.`,
   },
   fr: {
@@ -88,9 +92,53 @@ export const STATUS = {
       'Le fichier contient plus de fiches que l’intégration n’en lit : les dernières sont ignorées.',
     waiting: 'En attente de la première lecture du fichier de Santé Canada.',
     notYet: 'Le fichier de Santé Canada n’a pas encore été lu.',
+    old: ({ time }) =>
+      `Les rappels ne sont pas à jour : le fichier de Santé Canada a été lu pour la dernière fois le ${time}.`,
+    staleShort: ({ day }) =>
+      `Les rappels ne sont pas à jour : le fichier de Santé Canada n’a pas changé depuis le ${day}.`,
     summary: ({ text, time }) => `${text} Fichier lu à ${time}.`,
   },
 };
+
+// What went wrong with the file, said for people (never a raw code).
+export const ERRORS = {
+  en: {
+    network: 'the connection failed',
+    dns: 'the server name cannot be found (DNS)',
+    refused: 'the connection was refused',
+    closed: 'the connection was cut by the server',
+    timeout: 'no answer in time',
+    stalled: 'the download stopped halfway',
+    tooLong: 'the download took too long',
+    redirect: 'the server redirects elsewhere',
+    http: ({ status }) => `the server answered with an error (HTTP ${status})`,
+    size: 'the file is far larger than expected',
+    format: 'the file is not in the expected format',
+    noCopy: 'the server says "not modified" for a copy no longer kept',
+    stopped: 'the integration stopped',
+  },
+  fr: {
+    network: 'la connexion a échoué',
+    dns: 'le nom du serveur est introuvable (DNS)',
+    refused: 'la connexion a été refusée',
+    closed: 'la connexion a été coupée par le serveur',
+    timeout: 'pas de réponse à temps',
+    stalled: 'le téléchargement s’est arrêté en route',
+    tooLong: 'le téléchargement a pris trop de temps',
+    redirect: 'le serveur redirige ailleurs',
+    http: ({ status }) => `le serveur a répondu par une erreur (HTTP ${status})`,
+    size: 'le fichier est bien plus gros que prévu',
+    format: 'le fichier n’a pas le format attendu',
+    noCopy: 'le serveur répond « non modifié » pour une copie qui n’est plus gardée',
+    stopped: 'l’intégration s’est arrêtée',
+  },
+};
+
+/** An error `{ kind, status }` in one language. */
+export function describeError(error, language) {
+  const entry = ERRORS[language][error.kind] ?? ERRORS[language].network;
+  return typeof entry === 'function' ? entry(error) : entry;
+}
 
 /** One entry of a message table, in every language: `{ en, fr }`. */
 export function render(table, key, params = {}) {

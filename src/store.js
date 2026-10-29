@@ -18,11 +18,16 @@ import { createLogger } from '@gladysassistant/integration-sdk';
 
 const logger = createLogger({ name: 'rappels-canada-store' });
 export const FILE_NAME = 'rappels-canada.json';
-// Twice the size of a full state (35,000 NIDs and the recent sheets).
-export const MAX_FILE_BYTES = 8 * 1024 * 1024;
+// Above a full state (250,000 NIDs, two copies of 2,000 sheets): never
+// written larger (save() drops the copies first, never the NIDs seen).
+export const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 export class Store {
-  constructor(directory = process.env.RAPPELS_CANADA_DATA_DIR || '/data') {
+  constructor(
+    directory = process.env.RAPPELS_CANADA_DATA_DIR || '/data',
+    { maxFileBytes = MAX_FILE_BYTES } = {},
+  ) {
+    this.maxFileBytes = maxFileBytes;
     this.directory = directory;
     this.path = join(directory, FILE_NAME);
     this.pending = null;
@@ -47,7 +52,7 @@ export class Store {
       this.writable = false;
       return { data: null, unreadable: true };
     }
-    if (text.length > MAX_FILE_BYTES) {
+    if (text.length > this.maxFileBytes) {
       logger.warn(`${this.path} is too large (${text.length} bytes): ignored`);
       return this.setAside();
     }
@@ -88,7 +93,7 @@ export class Store {
     if (!this.pending) {
       // Chained after the write in progress, if any: one writer at a time.
       this.pending = (this.writing ?? Promise.resolve()).then(async () => {
-        const snapshot = JSON.stringify(this.latest);
+        const snapshot = this.serialize(this.latest);
         this.pending = null;
         try {
           const temporary = `${this.path}.tmp`;
@@ -112,6 +117,24 @@ export class Store {
       this.writing = this.pending;
     }
     return this.pending;
+  }
+
+  /**
+   * The JSON of the state, within MAX_FILE_BYTES: the copy of the other
+   * language goes first, then the sheets of the current copy (read again in
+   * full at the next check); the NIDs seen and the pending events stay.
+   */
+  serialize(data) {
+    let text = JSON.stringify(data);
+    if (text.length <= this.maxFileBytes) {
+      return text;
+    }
+    logger.warn(`State of ${text.length} bytes: the copies of the file are not kept`);
+    text = JSON.stringify({ ...data, otherCopy: null });
+    if (text.length <= this.maxFileBytes) {
+      return text;
+    }
+    return JSON.stringify({ ...data, otherCopy: null, copy: null });
   }
 
   /** Resolves once every write requested so far is on disk (or failed). */

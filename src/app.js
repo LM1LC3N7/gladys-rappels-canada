@@ -24,7 +24,7 @@ export const CONFIG_RETRY_MAX_MS = 5 * 60 * 1000;
 /**
  * @param {object} gladys GladysIntegration instance
  * @param {object} [options] test seams: store, fetch, baseUrl, now, monotonic,
- *   timers, timings, sourceTimeouts
+ *   timers, timings, sourceTimeouts, limits
  */
 export function registerHandlers(gladys, options = {}) {
   const timers = options.timers === undefined ? { setTimeout, clearTimeout } : options.timers;
@@ -38,6 +38,7 @@ export function registerHandlers(gladys, options = {}) {
     timers,
     timings: options.timings,
     sourceTimeouts: options.sourceTimeouts,
+    limits: options.limits,
   });
 
   // Resolved once the monitor has started; every handler waits for it, so a

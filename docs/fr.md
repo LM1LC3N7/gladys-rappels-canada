@@ -66,13 +66,25 @@ une nouvelle), pas plus qu'une sélection élargie ni une fiche seulement mise �
 jour. Une nouvelle fiche dont le jour de « dernière mise à jour » a plus de 7
 jours est retenue sans déclencher. Un évènement de scène refusé par Gladys est
 renvoyé à la vérification suivante ; au plus 20 évènements partent par
-vérification, le reste à la suivante.
+vérification, le reste à la suivante. Un évènement part avant que `/data` ne
+l'enregistre : si l'intégration est tuée entre les deux, il repart après le
+redémarrage (au moins une fois, jamais perdu).
 
 Ce qui a été vu, la copie des fiches récentes et l'heure de la dernière
 vérification sont gardés dans `/data` : un redémarrage ne déclenche rien une
-seconde fois et garde l'heure prévue de la vérification suivante. Un changement de
-sélection s'applique tout de suite depuis la copie gardée ; un changement de
-langue lit l'autre fichier (pas deux fois en 5 minutes).
+seconde fois, garde l'heure prévue de la vérification suivante et publie la
+copie gardée si elle est encore récente. Un changement de sélection s'applique
+tout de suite depuis la copie gardée ; un changement de langue vérifie l'autre
+fichier (pas deux fois en 5 minutes, jamais pendant une pause). Une copie de
+chaque langue est gardée : revenir à l'une coûte un « non modifié ». Des
+configurations enregistrées coup sur coup s'appliquent dans l'ordre : la
+dernière gagne.
+
+Quand un serveur du réseau de diffusion sert encore un fichier plus ancien que
+la copie gardée, la copie est conservée et les vérifications suivantes
+n'envoient que sa date, pour que ce serveur réponde « non modifié » au lieu de
+renvoyer 16 Mo. Un fichier d'un autre format (moins de la moitié des fiches
+datées, une colonne renommée) est refusé, jamais lu comme « aucun rappel ».
 
 ## Statut et pannes
 
@@ -88,8 +100,21 @@ Le statut de l'intégration indique :
 - qu'aucune catégorie n'est choisie ;
 - que `/data` ne peut pas être lu ou écrit.
 
-Rien n'est publié à 0 quand le fichier n'a pas pu être lu : les valeurs restent
-telles quelles.
+## À jour ou non
+
+Les rappels sont **à jour** quand la dernière vérification réussie a moins de
+deux intervalles et une heure et que le fichier n'est pas périmé. Sinon :
+
+- les compteurs de l'appareil ne sont pas publiés (ils gardent leur dernière
+  valeur) ;
+- l'action de scène échoue avec la raison (« Les rappels ne sont pas à jour :
+  le fichier de Santé Canada a été lu pour la dernière fois le … » ou « … n'a
+  pas changé depuis le … »), pour qu'une scène ne lise jamais « aucun rappel »
+  sur des données qui ne sont pas à jour ;
+- le bouton de la configuration donne cette raison au lieu des rappels ;
+- le widget titre « Rappels non à jour » et donne la raison sous la liste.
+
+Rien n'est publié à 0 quand le fichier n'a pas pu être lu.
 
 ## Limites
 

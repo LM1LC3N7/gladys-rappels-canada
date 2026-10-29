@@ -46,6 +46,7 @@ export async function createWorld(
     gladys,
     store,
     timings,
+    limits,
   } = {},
 ) {
   const srv = server ?? (await startServer());
@@ -59,6 +60,7 @@ export async function createWorld(
     monotonic: clock.monotonic,
     timers: clock.timers,
     timings,
+    limits,
     sourceTimeouts: { headers: 2000, stall: 300, total: 10000 },
   });
   // One hook, in this order: the app stops (its last write lands), then the

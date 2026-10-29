@@ -20,5 +20,11 @@ the notes of the version's GitHub Release.
   medical devices, other) and by brands or words.
 - Scene trigger `new_recall` (a new sheet in the selection), scene action
   `read_recalls`, widget `recalls`, configuration action `check_now`.
-- Status of the source: unreachable (with retries and pauses kept across
-  restarts), stale file, `/data` unreadable or unwritable.
+- Status of the source in words: unreachable (with retries and pauses kept
+  across restarts), stale file, file of another format, `/data` unreadable or
+  unwritable.
+- Recalls not up to date (last check too old, stale file) are never given as
+  current: the scene action fails with the reason, the button and the widget
+  say it.
+- A copy per language, configurations applied in order, a restart publishing
+  the fresh copy kept, a download given up at once on stop.

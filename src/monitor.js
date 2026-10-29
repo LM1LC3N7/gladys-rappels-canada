@@ -15,7 +15,17 @@
 // NID) is not a new recall. The first file ever read fires nothing: what is
 // listed then is not news. What was seen is kept under /data, so a restart
 // fires nothing again; a scene event Gladys refused, or one beyond the cap of a
-// cycle, stays pending (in /data too) and is sent at the next check.
+// cycle, stays pending (in /data too) and is sent at the next check. An event
+// is sent before /data records it: a crash in between sends it again (at least
+// once, never lost).
+//
+// Freshness: the values (states, actions, widget) come from a check less than
+// two intervals and an hour old, of a file that is not stale; otherwise they
+// say they are not up to date and the counters are not published. A restart
+// takes the copy of /data with the time it was read.
+//
+// Configurations saved back to back are applied one by one, in order: the last
+// one wins.
 //
 // Clocks: the schedule runs on the monotonic clock (a wall clock moved by NTP
 // neither hastens nor delays a check); the wall clock dates the days of the
@@ -33,6 +43,8 @@ import {
   clip,
   dayBefore,
   describe,
+  describeError,
+  formatDate,
   formatSourceDay,
   formatTime,
   join,
@@ -40,7 +52,7 @@ import {
   render,
   renderEach,
 } from './messages.js';
-import { BASE_URL, download, httpDate } from './source.js';
+import { BASE_URL, MAX_RECORDS, download, httpDate } from './source.js';
 
 const logger = createLogger({ name: 'rappels-canada' });
 
@@ -69,9 +81,13 @@ export const DEFAULT_TIMINGS = {
 
 // The file is regenerated every day: unchanged for 3 days, it is stale.
 export const STALE_MS = 3 * DAY;
-// Sheets kept from the file: those updated in the last 30 days.
+// Sheets kept from the file: those updated in the last 30 days (about 200 on
+// 29/10/2026), 1,500 at most, plus the sheets never seen before, 500 at most.
+// Two copies (one per language) of 2,000 sheets of 2.5 KB at most and 250,000
+// NIDs stay under the 16 MB of /data (src/store.js).
 export const KEEP_DAYS = 30;
-export const MAX_KEPT = 5000;
+export const MAX_KEPT = 1500;
+export const MAX_NEW_KEPT = 500;
 // The device counts the sheets of the last 7 days (today and the 6 before).
 export const WEEK_DAYS = 7;
 // A new NID older than this ("last updated") is remembered, never fired.
@@ -98,6 +114,7 @@ export class Monitor {
    * @param {object|false} [options.timers] { setTimeout, clearTimeout }; false: no timer
    * @param {object} [options.timings] overrides of DEFAULT_TIMINGS
    * @param {object} [options.sourceTimeouts] overrides of the download timeouts
+   * @param {object} [options.limits] overrides of maxKept, maxNewKept, maxRecords (tests)
    */
   constructor({
     gladys,
@@ -109,6 +126,7 @@ export class Monitor {
     timers,
     timings,
     sourceTimeouts,
+    limits,
   }) {
     this.gladys = gladys;
     this.store = store;
@@ -119,27 +137,34 @@ export class Monitor {
     this.timers = timers === undefined ? { setTimeout, clearTimeout } : timers;
     this.timings = { ...DEFAULT_TIMINGS, ...timings };
     this.sourceTimeouts = sourceTimeouts;
+    this.limits = {
+      maxKept: MAX_KEPT,
+      maxNewKept: MAX_NEW_KEPT,
+      maxRecords: MAX_RECORDS,
+      ...limits,
+    };
     this.config = null;
+    this.configChain = Promise.resolve();
     this.data = emptyData();
     this.dataUnreadable = false;
-    // The sheets kept from the last file read, and the selection of the last
-    // 7 days among them, newest first.
+    // The sheets kept from the copy of the language of the configuration, and
+    // the selection of the last 7 days among them, newest first.
     this.records = [];
     this.recalls = [];
-    this.lastSuccessAt = null; // wall, for the texts
-    this.lastSuccessMono = null;
+    this.lastSuccessAt = null; // wall time the copy was read, for the texts
+    this.lastSuccessMono = null; // the same on the monotonic clock (null: unknown)
     this.lastAttemptMono = null;
-    this.lastLanguageRead = null;
     this.sourceStale = false;
     this.lastModifiedDay = null;
     this.truncated = false;
-    this.error = null;
+    this.error = null; // { kind, status } of the last failed check
     this.pauseUntilMono = null;
     this.failures = 0;
     this.nextAtMono = null;
     this.cycleTimer = null;
     this.statusKey = undefined;
     this.running = null;
+    this.downloading = null;
     this.lastRefreshMono = -Infinity;
     this.refreshTimer = null;
     this.signature = null;
@@ -166,6 +191,15 @@ export class Monitor {
     }
   }
 
+  intervalMs(config = this.config) {
+    return config.refreshHours * this.timings.hourMs;
+  }
+
+  /** The age up to which a check is fresh: two intervals and an hour. */
+  freshMs() {
+    return 2 * this.intervalMs() + this.timings.hourMs;
+  }
+
   // --- Lifecycle -------------------------------------------------------------
 
   async start(config) {
@@ -175,24 +209,50 @@ export class Monitor {
     if (data?.version === 1) {
       this.data = { ...emptyData(), ...sanitize(data) };
     }
-    // The copy kept under /data serves the widget at once; the states wait for
-    // a check of the file (nothing old is published as new).
-    if (this.data.copy?.language === config.language) {
-      this.records = this.data.copy.records;
-      this.reselect();
-    }
+    // The copy kept under /data serves at once, as fresh as when it was read.
+    this.adoptCopy();
     await this.publishDiscovered();
     this.warnAboutConfig();
     logger.info(`Started: the file of Health Canada is checked every ${config.refreshHours} h`);
     this.nextAtMono = this.monotonic() + this.restartDelay();
     await this.updateConnectionStatus();
+    await this.publishStates();
     this.schedule();
+  }
+
+  /**
+   * Take the copy of /data for the language of the configuration (swapping
+   * the two copies if needed), with its freshness.
+   */
+  adoptCopy() {
+    const language = this.config.language;
+    const { data } = this;
+    if (data.copy?.language !== language && data.otherCopy?.language === language) {
+      const current = data.copy ? { ...data.copy, readAt: data.readAt } : null;
+      data.copy = data.otherCopy;
+      data.readAt = data.otherCopy.readAt ?? null;
+      data.otherCopy = current;
+    }
+    const copy = data.copy?.language === language ? data.copy : null;
+    this.records = copy?.records ?? [];
+    this.lastSuccessAt = copy && Number.isFinite(data.readAt) ? data.readAt : null;
+    this.lastSuccessMono = null;
+    this.sourceStale = copy?.stale === true;
+    this.lastModifiedDay = copy?.lastModifiedDay ?? null;
+    if (this.lastSuccessAt !== null) {
+      const age = this.now() - this.lastSuccessAt;
+      // A time of /data in the future is not trusted.
+      if (age >= 0) {
+        this.lastSuccessMono = this.monotonic() - age;
+      }
+    }
+    this.reselect();
   }
 
   /** Time to wait after a restart: the rest of the interval, or of a pause. */
   restartDelay() {
     const now = this.now();
-    const interval = this.config.refreshHours * this.timings.hourMs;
+    const interval = this.intervalMs();
     const { attemptAt, nextAt, pauseUntil } = this.data;
     let wait = 0;
     // A date of /data in the future is not trusted.
@@ -222,28 +282,45 @@ export class Monitor {
     this.requestRefresh();
   }
 
-  async reconfigure(config, { quiet = false } = {}) {
+  /** Configurations are applied one by one, in the order they came: the last wins. */
+  reconfigure(config, options) {
+    const run = this.configChain.then(() => this.applyConfig(config, options));
+    this.configChain = run.catch(() => {});
+    return run;
+  }
+
+  async applyConfig(config, { quiet = false } = {}) {
     const previous = this.config;
     this.config = config;
     if (!quiet) {
       logger.info('Configuration saved');
       this.warnAboutConfig();
     }
+    const mono = this.monotonic();
+    let moved = false;
     if (config.language !== previous?.language) {
-      await this.publishDiscovered();
-      // The other file: read at once, unless a file was read less than 5
-      // minutes ago (then 5 minutes after it).
-      this.records = this.data.copy?.language === config.language ? this.data.copy.records : [];
-      const mono = this.monotonic();
+      this.adoptCopy();
+      // The other file: checked at once (a 304 if its copy is kept), unless a
+      // file was read less than 5 minutes ago, and never during a pause.
       const earliest =
         this.lastAttemptMono === null ? mono : this.lastAttemptMono + this.timings.languageChangeMs;
       this.nextAtMono = Math.max(earliest, this.pauseUntilMono ?? mono);
+      moved = true;
+      await this.publishDiscovered();
     } else if (config.refreshHours !== previous?.refreshHours && this.failures === 0) {
-      const base = this.lastAttemptMono ?? this.monotonic();
-      this.nextAtMono = Math.max(
-        base + config.refreshHours * this.timings.hourMs,
-        this.pauseUntilMono ?? 0,
-      );
+      const base = this.lastAttemptMono ?? mono;
+      this.nextAtMono = Math.max(base + this.intervalMs(config), this.pauseUntilMono ?? 0);
+      moved = true;
+    }
+    if (this.config !== config) {
+      // A newer configuration is already applied (never the case in the
+      // chain, kept as a guard).
+      return;
+    }
+    if (moved) {
+      // Kept under /data: a restart follows the new time.
+      this.data.nextAt = this.now() + Math.max(0, this.nextAtMono - this.monotonic());
+      await this.save();
     }
     this.reselect();
     this.schedule();
@@ -258,6 +335,8 @@ export class Monitor {
     this.stopped = true;
     this.clearTimer('cycleTimer');
     this.clearTimer('refreshTimer');
+    // A download in progress is given up at once (Docker kills after 10 s).
+    this.downloading?.abort();
     await this.running?.catch(() => {});
     await this.store.flush();
   }
@@ -336,6 +415,7 @@ export class Monitor {
       .catch((err) => this.failed('cycle', 'error', 'Check failed', err))
       .finally(() => {
         this.running = null;
+        this.downloading = null;
         this.schedule();
       });
     return this.running;
@@ -345,7 +425,7 @@ export class Monitor {
     const startMono = this.monotonic();
     const startWall = this.now();
     const language = this.config.language;
-    const interval = this.config.refreshHours * this.timings.hourMs;
+    const interval = this.intervalMs();
     this.lastAttemptMono = startMono;
     // The next check is armed before anything is awaited: a slow /data or a
     // failure never leaves the integration without one.
@@ -357,19 +437,36 @@ export class Monitor {
     const copy = this.data.copy?.language === language ? this.data.copy : null;
     const known = Array.isArray(this.data.known) ? new Set(this.data.known) : null;
     const cutoff = dayBefore(localDay(startWall), KEEP_DAYS);
+    const { maxKept, maxNewKept, maxRecords } = this.limits;
     let kept = 0;
+    let keptNew = 0;
+    let capped = false;
     const keep = (record) => {
-      if (record.archived || kept >= MAX_KEPT) {
+      if (record.archived) {
         return false;
       }
-      const wanted =
-        (record.updated !== null && record.updated >= cutoff) ||
-        (known !== null && !known.has(record.nid));
-      if (wanted) {
-        kept += 1;
+      // A sheet never seen is kept apart: a bulk update of old sheets never
+      // pushes a new recall out.
+      if (known !== null && !known.has(record.nid)) {
+        if (keptNew >= maxNewKept) {
+          capped = true;
+          return false;
+        }
+        keptNew += 1;
+        return true;
       }
-      return wanted;
+      if (record.updated === null || record.updated < cutoff) {
+        return false;
+      }
+      if (kept >= maxKept) {
+        capped = true;
+        return false;
+      }
+      kept += 1;
+      return true;
     };
+    const controller = new AbortController();
+    this.downloading = controller;
     let result;
     try {
       result = await download({
@@ -378,31 +475,45 @@ export class Monitor {
         baseUrl: this.baseUrl,
         etag: copy?.etag ?? null,
         lastModified: copy?.lastModified ?? null,
+        sendEtag: copy?.imsOnly !== true,
         keep,
+        maxRecords,
         timeouts: this.sourceTimeouts,
+        signal: controller.signal,
       });
     } catch (err) {
-      await this.onFailure(err, startMono, startWall);
+      if (!this.stopped) {
+        await this.onFailure(err, startMono, startWall);
+      }
+      return;
+    } finally {
+      this.downloading = null;
+    }
+    if (this.stopped || this.config.language !== language) {
+      // Stopped, or the language changed meanwhile: the check of the new
+      // language is already planned.
       return;
     }
-    if (this.stopped) {
-      return;
-    }
+    let imsOnly = false;
     if (result.modified && copy) {
       // The files are served through a CDN: an edge may still hold the copy of
-      // the day before. An older file than the copy kept is not taken.
+      // the day before. An older file than the copy kept is not taken, and the
+      // next checks send only the date, so such an edge answers 304.
       const fresh = httpDate(result.lastModified);
-      const kept = httpDate(copy.lastModified);
-      if (fresh !== null && kept !== null && fresh < kept) {
+      const keptAt = httpDate(copy.lastModified);
+      if (fresh !== null && keptAt !== null && fresh < keptAt) {
         logger.debug(
           `Older file served (${result.lastModified}): the copy of ${copy.lastModified} is kept`,
         );
         result = { modified: false, date: result.date, lastModified: copy.lastModified };
+        imsOnly = true;
       }
     }
     if (!result.modified && !copy) {
       // A 304 for a copy this integration no longer has: read it in full next time.
-      await this.onFailure(new Error('304 without a copy'), startMono, startWall);
+      const err = new Error('304 without a copy');
+      err.kind = 'noCopy';
+      await this.onFailure(err, startMono, startWall);
       return;
     }
     this.failures = 0;
@@ -426,7 +537,7 @@ export class Monitor {
     let pending;
     if (result.modified) {
       records = result.records;
-      this.truncated = result.truncated || kept >= MAX_KEPT;
+      this.truncated = result.truncated || capped;
       if (result.skipped > 0) {
         logger.debug(`${result.skipped} sheet(s) too large, skipped`);
       }
@@ -446,25 +557,33 @@ export class Monitor {
         const sorted = [...knownNext].sort((a, b) => Number(a) - Number(b));
         knownNext = new Set(sorted.slice(sorted.length - MAX_KNOWN));
       }
+      if (this.data.copy && this.data.copy.language !== language) {
+        // The copy of the other language is kept: going back to it costs a 304.
+        this.data.otherCopy = { ...this.data.copy, readAt: this.data.readAt };
+      }
       this.data.copy = {
         language,
         etag: result.etag,
         lastModified: result.lastModified,
+        imsOnly: false,
         records,
       };
     } else {
       records = copy.records;
       pending = this.data.pending ?? [];
       knownNext = known ?? new Set();
+      this.data.copy.imsOnly = imsOnly || copy.imsOnly === true;
     }
+    this.data.copy.stale = this.sourceStale;
+    this.data.copy.lastModifiedDay = this.lastModifiedDay;
     this.records = records;
-    this.lastLanguageRead = language;
     this.reselect();
     logger.debug(
       `Check: ${result.modified ? `${records.length} recent sheet(s) kept` : 'file unchanged (304)'}, ${this.recalls.length} in the selection over 7 days`,
     );
 
     const left = await this.fireNew(pending, records, startWall);
+    // A pending NID is never known: it stays pending until sent.
     for (const nid of left) {
       knownNext.delete(nid);
     }
@@ -493,8 +612,8 @@ export class Monitor {
 
   async onFailure(err, startMono, startWall) {
     this.failures += 1;
-    this.error = err.message;
-    const interval = this.config.refreshHours * this.timings.hourMs;
+    this.error = { kind: err.kind ?? 'network', status: err.status ?? null };
+    const interval = this.intervalMs();
     const { retryMs, minPauseMs, maxPauseMs } = this.timings;
     let wait = Math.min(interval, retryMs * 2 ** Math.min(this.failures - 1, 10));
     const status = err.status ?? null;
@@ -586,16 +705,23 @@ export class Monitor {
 
   // --- States ------------------------------------------------------------------
 
+  /**
+   * 'none' (never read in this language), 'old' (last check too old, or of an
+   * unknown age), 'stale' (the file did not change for 3 days) or 'fresh'.
+   */
+  freshness() {
+    if (this.lastSuccessAt === null) {
+      return 'none';
+    }
+    if (this.lastSuccessMono === null || this.monotonic() - this.lastSuccessMono > this.freshMs()) {
+      return 'old';
+    }
+    return this.sourceStale ? 'stale' : 'fresh';
+  }
+
   /** States are published only from a recent check of a file that is not stale. */
   publishable() {
-    if (this.lastSuccessMono === null || this.sourceStale) {
-      return false;
-    }
-    if (this.lastLanguageRead !== this.config.language) {
-      return false;
-    }
-    const age = this.monotonic() - this.lastSuccessMono;
-    return age <= 2 * this.config.refreshHours * this.timings.hourMs + this.timings.hourMs;
+    return this.freshness() === 'fresh';
   }
 
   statesOf() {
@@ -636,7 +762,9 @@ export class Monitor {
     const parts = [];
     const language = this.config.language;
     if (this.error !== null) {
-      parts.push(render(STATUS, 'sourceDown', { error: clip(this.error, 120) }));
+      parts.push(
+        renderEach(STATUS, 'sourceDown', (l) => ({ error: describeError(this.error, l) })),
+      );
       if (this.pauseUntilMono !== null && this.pauseUntilMono > this.monotonic()) {
         const at = this.now() + (this.pauseUntilMono - this.monotonic());
         parts.push(renderEach(STATUS, 'paused', (l) => ({ time: formatTime(at, l) })));
@@ -644,7 +772,7 @@ export class Monitor {
     } else if (this.lastSuccessMono === null) {
       parts.push(render(STATUS, 'waiting'));
     }
-    if (this.sourceStale && this.error === null) {
+    if (this.sourceStale && this.error === null && this.lastSuccessAt !== null) {
       parts.push(
         renderEach(STATUS, 'stale', (l) => ({ day: formatSourceDay(this.lastModifiedDay, l) })),
       );
@@ -689,14 +817,29 @@ export class Monitor {
     await this.publishStates();
   }
 
-  /** What the actions and the widget show: never a new download. */
+  /**
+   * What the actions and the widget show: never a new download. `freshness`
+   * says whether the recalls can be given as current; `warning` (multi-
+   * language) says why not.
+   */
   snapshot() {
     this.reselect();
+    const freshness = this.freshness();
+    let warning = null;
+    if (freshness === 'none') {
+      warning = render(STATUS, 'notYet');
+    } else if (freshness === 'old') {
+      warning = renderEach(STATUS, 'old', (l) => ({ time: formatDate(this.lastSuccessAt, l) }));
+    } else if (freshness === 'stale') {
+      warning = renderEach(STATUS, 'staleShort', (l) => ({
+        day: formatSourceDay(this.lastModifiedDay, l),
+      }));
+    }
     return {
       recalls: this.recalls,
-      ok: this.lastSuccessAt !== null || this.records.length > 0,
-      readAt: this.lastSuccessAt ?? this.data.readAt ?? null,
-      stale: this.sourceStale,
+      freshness,
+      warning,
+      readAt: this.lastSuccessAt,
     };
   }
 
@@ -731,11 +874,57 @@ function emptyData() {
     known: null,
     pending: [],
     copy: null,
+    otherCopy: null,
   };
 }
 
 const isNid = (value) => typeof value === 'string' && /^\d{1,10}$/.test(value);
 const isText = (value) => typeof value === 'string';
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TEXT_FIELDS = [
+  'title',
+  'product',
+  'category',
+  'subcategory',
+  'issue',
+  'todo',
+  'recallClass',
+  'url',
+];
+
+/** A copy of /data with the expected shape, or null. */
+function sanitizeCopy(copy) {
+  if (
+    !copy ||
+    typeof copy !== 'object' ||
+    !['en', 'fr'].includes(copy.language) ||
+    !Array.isArray(copy.records)
+  ) {
+    return null;
+  }
+  const records = copy.records.filter(
+    (r) =>
+      r &&
+      isNid(r.nid) &&
+      TEXT_FIELDS.every((key) => isText(r[key])) &&
+      (r.updated === null || DAY_RE.test(r.updated)),
+  );
+  return {
+    language: copy.language,
+    etag: isText(copy.etag) ? copy.etag : null,
+    lastModified: isText(copy.lastModified) ? copy.lastModified : null,
+    imsOnly: copy.imsOnly === true,
+    stale: copy.stale === true,
+    lastModifiedDay:
+      isText(copy.lastModifiedDay) && DAY_RE.test(copy.lastModifiedDay)
+        ? copy.lastModifiedDay
+        : null,
+    readAt: Number.isFinite(copy.readAt) ? copy.readAt : null,
+    records: records
+      .slice(0, MAX_KEPT + MAX_NEW_KEPT)
+      .map((r) => ({ ...r, archived: r.archived === true })),
+  };
+}
 
 /** Only what has the expected shape is taken from /data. */
 function sanitize(data) {
@@ -746,37 +935,10 @@ function sanitize(data) {
   out.nextAt = Number.isFinite(data.nextAt) ? data.nextAt : null;
   out.known = Array.isArray(data.known) ? data.known.filter(isNid) : null;
   out.pending = Array.isArray(data.pending) ? data.pending.filter(isNid).slice(-MAX_PENDING) : [];
-  const copy = data.copy;
-  if (
-    copy &&
-    typeof copy === 'object' &&
-    ['en', 'fr'].includes(copy.language) &&
-    Array.isArray(copy.records)
-  ) {
-    const records = copy.records.filter(
-      (r) =>
-        r &&
-        isNid(r.nid) &&
-        [
-          'title',
-          'product',
-          'category',
-          'subcategory',
-          'issue',
-          'todo',
-          'recallClass',
-          'url',
-        ].every((key) => isText(r[key])) &&
-        (r.updated === null || /^\d{4}-\d{2}-\d{2}$/.test(r.updated)),
-    );
-    out.copy = {
-      language: copy.language,
-      etag: isText(copy.etag) ? copy.etag : null,
-      lastModified: isText(copy.lastModified) ? copy.lastModified : null,
-      records: records.slice(0, MAX_KEPT).map((r) => ({ ...r, archived: r.archived === true })),
-    };
-  } else {
-    out.copy = null;
+  out.copy = sanitizeCopy(data.copy);
+  out.otherCopy = sanitizeCopy(data.otherCopy);
+  if (out.otherCopy?.language === out.copy?.language) {
+    out.otherCopy = null;
   }
   return out;
 }

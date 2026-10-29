@@ -2,7 +2,8 @@
 
 ## Before announcing
 
-- [ ] Review r1.
+- [x] Review r1 (2026-10-29): REFUSÉ, 3 important, 9 minor: fixed.
+- [ ] Review r2.
 - [ ] Try on a real Gladys 5.1+: device creation, the widget, a scene on
       `new_recall` over a few days, the scene action.
 - [ ] Turn on "Private vulnerability reporting" (SECURITY.md points there).
@@ -34,7 +35,9 @@
   happens only when the file changed, about once a day. Honest User-Agent
   naming the integration and its repository.
 - Memory: the file is read as a stream (src/jsonArray.js); only the NIDs and
-  the sheets of the last 30 days are kept (5,000 at most), the body is capped
+  the sheets of the last 30 days are kept (1,500 at most, plus 500 sheets
+  never seen; /data stays under 16 MB, the copies dropped first, never the
+  NIDs), the body is capped
   at 64 MB, one sheet at 64 KB (skipped beyond), 200,000 sheets at most.
   Measured on the real file: about 50 MB of RSS more during a download.
 - "New recall" = a NID never seen in a file before, in the selection, updated
@@ -54,3 +57,12 @@
   `notifications`.
 - No `poll_frequency`: the integration runs its own schedule, like the
   neighbour gladys-rappelconso.
+- Freshness (review r1): up to date = last success within two intervals and
+  an hour, file not stale. Otherwise no state, the scene action fails with
+  the reason, the button and the widget say it. A restart publishes the copy
+  of /data while it is fresh.
+- Scene events are at least once (sent before /data records them).
+- A file with fewer than half of its sheets dated is refused (renamed column).
+- After an older file from a CDN edge, only If-Modified-Since is sent until a
+  newer file comes (the edge answers 304).
+- User-Agent version read from package.json.
