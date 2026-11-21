@@ -10,7 +10,7 @@ English and French.
 - User documentation: [English](docs/en.md), [français](docs/fr.md).
 - Tested against the real file of Health Canada and in a test Gladys on
   29/10/2026; not yet over weeks of real use.
-- Requires Gladys 5.1.0 or later. No account, no key.
+- Requires Gladys 5.3.0 or later. No account, no key.
 
 ## Development
 

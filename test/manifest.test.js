@@ -1,6 +1,6 @@
 // -----------------------------------------------------------------------------
 // Consistency checks between `gladys-assistant-integration.json` and the code,
-// and the rules of the project on the manifest: 0.1.0 everywhere, Gladys 5.1.0
+// and the rules of the project on the manifest: one version everywhere, Gladys 5.3.0
 // at least, 1 to 3 catalog categories, no key prefixed `gladys_`, no secret
 // with a default, multi-language texts.
 // -----------------------------------------------------------------------------
@@ -50,7 +50,7 @@ const handlerKeys = (prefix) =>
 
 test('identity: name, image, cover, cloud transport, categories', () => {
   assert.equal(manifest.type, 'device');
-  assert.equal(manifest.docker_image, 'ghcr.io/lm1lc3n7/gladys-rappels-canada:0.1.0');
+  assert.equal(manifest.docker_image, `ghcr.io/lm1lc3n7/gladys-rappels-canada:${pkg.version}`);
   assert.equal(
     manifest.cover_image,
     'https://raw.githubusercontent.com/LM1LC3N7/gladys-rappels-canada/main/cover.png',
@@ -58,12 +58,12 @@ test('identity: name, image, cover, cloud transport, categories', () => {
   assert.deepEqual(manifest.transports, ['cloud']);
   assert.ok(manifest.categories.length >= 1 && manifest.categories.length <= 3);
   assert.equal(manifest.keywords, undefined);
-  assert.equal(manifest.countries, undefined);
+  assert.deepEqual(manifest.countries, ['CA']);
 });
 
-test('version 0.1.0 in package.json, its lock, the manifest and the image tag', () => {
-  for (const version of [pkg.version, lock.version, lock.packages[''].version, manifest.version]) {
-    assert.equal(version, '0.1.0');
+test('one version in package.json, its lock, the manifest and the image tag', () => {
+  for (const version of [lock.version, lock.packages[''].version, manifest.version]) {
+    assert.equal(version, pkg.version);
   }
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.ok(manifest.docker_image.endsWith(`:${manifest.version}`));
@@ -77,7 +77,7 @@ test('the dependency of the SDK is a range, never pinned', () => {
 });
 
 test('Gladys 5.1.0 at least: widgets, scene triggers and actions', () => {
-  assert.equal(manifest.gladys_version, '>=5.1.0');
+  assert.equal(manifest.gladys_version, '>=5.3.0');
 });
 
 test('every manifest action, scene action and widget has its handler, and vice versa', () => {
